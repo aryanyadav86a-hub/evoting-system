@@ -109,7 +109,7 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/":
             body = """
             <h2>Welcome to Our E-Voting System Project</h2>
-            <p>Secure • Transparent • Blockchain Based</p>
+            <p>Secure *** Transparent *** Blockchain Based</p>
             <a href="/loading"><button class="primary-btn">Enter System</button></a>
             """
             return self.respond(html_page("Welcome", body))
