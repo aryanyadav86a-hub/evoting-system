@@ -1,9 +1,3 @@
-##############################################
-#  BLOCKCHAIN E-VOTING SYSTEM (DEPLOY-READY VERSION)
-#  Clean UI • Admin Login • Timestamped Blockchain
-#  Web-based Fingerprint Step (fixed for hosting)
-##############################################
-
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
 import time
@@ -11,10 +5,6 @@ import hashlib
 import os
 
 # ---------------- FINGERPRINT MODULE ----------------
-# NOTE: original code used input() to "scan" a fingerprint. That works only
-# in a local terminal. On a real web server there's no terminal attached to
-# a browser request, so it would hang forever. This version asks for the
-# simulated fingerprint ID through a web form field instead.
 FINGERPRINT_TEMPLATES = {
     "VOTER1001": "fp1", "VOTER1002": "fp2", "VOTER1003": "fp3", "VOTER1004": "fp4",
     "VOTER1005": "fp5", "VOTER1006": "fp6", "VOTER1007": "fp7", "VOTER1008": "fp8"
@@ -105,6 +95,14 @@ def html_page(title, body):
 # MAIN WEB HANDLER
 ##############################################
 class WebHandler(BaseHTTPRequestHandler):
+    def get_params(self):
+        # सुरक्षित तरीके से क्वेरी पैरामीटर निकालने के लिए फिक्स (Safe Parsing)
+        if "?" in self.path:
+            parts = self.path.split("?", 1)
+            if len(parts) > 1:
+                return urllib.parse.parse_qs(parts[1])
+        return {}
+
     def do_GET(self):
         path = self.path.split("?")[0]
 
@@ -146,7 +144,7 @@ class WebHandler(BaseHTTPRequestHandler):
             """))
 
         if path == "/admin":
-            params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            params = self.get_params()
             pw = params.get("pass", [""])[0]
             if pw != ADMIN_PASSWORD:
                 return self.respond(html_page("Error", "Wrong password"))
@@ -164,7 +162,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.respond(html_page("Admin Dashboard", body))
 
         if path == "/qr":
-            params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            params = self.get_params()
             voter = params.get("id", [""])[0]
             if voter not in users:
                 return self.respond(html_page("Error", "Invalid Voter ID"))
@@ -181,12 +179,11 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.respond(html_page("QR Login", body))
 
         if path == "/vote":
-            params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            params = self.get_params()
             voter = params.get("id", [""])[0]
             token = params.get("tkn", [""])[0]
             if qr_tokens.get(voter) != token:
                 return self.respond(html_page("Error", "Invalid Token"))
-            # Web-based fingerprint step (replaces blocking input())
             body = f"""
             <h2>Fingerprint Verification</h2>
             <p>Simulated sensor — enter the fingerprint ID on file for this voter.</p>
@@ -200,7 +197,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.respond(html_page("Fingerprint Check", body))
 
         if path == "/verify_fp":
-            params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            params = self.get_params()
             voter = params.get("id", [""])[0]
             token = params.get("tkn", [""])[0]
             fp = params.get("fp", [""])[0]
@@ -221,7 +218,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.respond(html_page("Vote", cards))
 
         if path == "/cast":
-            params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            params = self.get_params()
             voter = params.get("id", [""])[0]
             choice = params.get("c", [""])[0]
             if contract.vote(voter, choice):
@@ -242,7 +239,7 @@ class WebHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # quiet logs
 
-
-if __name__ == "__main__":
-    print(f"Server running on 0.0.0.0:{PORT}")
-    HTTPServer(("0.0.0.0", PORT), WebHandler).serve_forever()
+# Railway पर सीधे रन करने के लिए बिना शर्त सर्वर शुरू करें
+print(f"Server starting on 0.0.0.0:{PORT}")
+server = HTTPServer(("0.0.0.0", PORT), WebHandler)
+server.serve_forever()
