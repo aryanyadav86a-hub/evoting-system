@@ -1,23 +1,22 @@
 ##############################################
-#  DIGITAL E-VOTING SYSTEM (DEPLOY-READY VERSION)
+#  DIGITAL E-VOTING SYSTEM
 #  Realistic Multi-Page UI • Party Symbols (SVG) • Admin Dashboard
 #  Timestamped Blockchain • Web-based Fingerprint Step
 #
-#  NOTE: This is an academic / demo project. It is NOT affiliated with,
-#  endorsed by, or built using any material from the Election Commission
-#  of India. Party symbols below are simplified original SVG illustrations
-#  drawn for this demo, not copies of any official artwork or trademark.
+#  NOTE: This implementation is provided for educational purposes and is not affiliated with,
+#  endorsed by, or built using any material from the Election Commission of India.
+#  Party symbols are simplified original illustrations created for this project and are not official artwork.
 ##############################################
-
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
 import time
 import hashlib
 import os
 import json
-
+import webbrowser
+import threading
 PORT = int(os.environ.get("PORT", 8080))
-
+LOCAL_URL = f"http://localhost:{PORT}"
 # ---------------- FINGERPRINT MODULE ----------------
 # NOTE: the original version used input() to "scan" a fingerprint, which only
 # works in a local terminal. On a real web server there's no terminal attached
@@ -27,10 +26,8 @@ FINGERPRINT_TEMPLATES = {
     "VOTER1001": "fp1", "VOTER1002": "fp2", "VOTER1003": "fp3", "VOTER1004": "fp4",
     "VOTER1005": "fp5", "VOTER1006": "fp6", "VOTER1007": "fp7", "VOTER1008": "fp8"
 }
-
 def verify_fingerprint(user_id, scanned_value):
     return FINGERPRINT_TEMPLATES.get(user_id) == scanned_value
-
 ##############################################
 # USERS DATABASE
 ##############################################
@@ -39,16 +36,15 @@ users = {
     "VOTER1004": "SNEHA KUMARI", "VOTER1005": "RAHUL SHARMA",
     "VOTER1006": "PRIYA GUPTA", "VOTER1007": "VIKRAM SINGH", "VOTER1008": "ANITA RAI"
 }
-
 qr_tokens = {}
 voted = {}
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-
 def generate_token(voter_id):
     token = hashlib.sha256(f"{voter_id}{time.time()}".encode()).hexdigest()[:16]
     qr_tokens[voter_id] = token
     return token
-
+def invalidate_token(voter_id):
+    qr_tokens.pop(voter_id, None)
 def register_voter(full_name):
     """Registers a new voter: assigns the next VOTERxxxx ID and a matching
     simulated fingerprint ID (fpN), and adds them to the in-memory database."""
@@ -59,7 +55,6 @@ def register_voter(full_name):
             existing_nums.append(int(digits))
     next_num = max(existing_nums) + 1 if existing_nums else 1001
     voter_id = f"VOTER{next_num}"
-
     existing_fps = []
     for fp in FINGERPRINT_TEMPLATES.values():
         digits = "".join(ch for ch in fp if ch.isdigit())
@@ -67,11 +62,9 @@ def register_voter(full_name):
             existing_fps.append(int(digits))
     next_fp_num = max(existing_fps) + 1 if existing_fps else 1
     fingerprint_id = f"fp{next_fp_num}"
-
     users[voter_id] = full_name.strip().upper()
     FINGERPRINT_TEMPLATES[voter_id] = fingerprint_id
     return voter_id, fingerprint_id
-
 ##############################################
 # PARTY SYMBOLS — simple original SVG illustrations (not official artwork)
 ##############################################
@@ -87,7 +80,6 @@ def _icon_lotus(c):
     <ellipse cx="50" cy="34" rx="12" ry="22" transform="rotate(315 50 50)"/>
     <circle cx="50" cy="50" r="9" fill="#fff5e0"/>
     </g></svg>'''
-
 def _icon_cycle(c):
     return f'''<svg viewBox="0 0 100 100"><g fill="none" stroke="{c}" stroke-width="5" stroke-linecap="round">
     <circle cx="27" cy="70" r="17"/>
@@ -95,7 +87,6 @@ def _icon_cycle(c):
     <path d="M27 70 L47 35 L73 70 M47 35 L38 70 M47 35 L60 35 M60 35 L73 70"/>
     <path d="M60 35 L66 24 L74 24" stroke-width="4"/>
     </g></svg>'''
-
 def _icon_hand(c):
     return f'''<svg viewBox="0 0 100 100"><g fill="{c}">
     <rect x="34" y="45" width="32" height="38" rx="10"/>
@@ -105,7 +96,6 @@ def _icon_hand(c):
     <rect x="65" y="28" width="10" height="32" rx="5"/>
     <rect x="20" y="50" width="12" height="24" rx="6" transform="rotate(-25 26 62)"/>
     </g></svg>'''
-
 def _icon_elephant(c):
     return f'''<svg viewBox="0 0 100 100"><g fill="{c}">
     <ellipse cx="48" cy="52" rx="28" ry="20"/>
@@ -117,7 +107,6 @@ def _icon_elephant(c):
     <rect x="70" y="64" width="8" height="18" rx="3"/>
     <circle cx="66" cy="46" r="3" fill="#fff"/>
     </g></svg>'''
-
 def _icon_broom(c):
     return f'''<svg viewBox="0 0 100 100"><g fill="none" stroke="{c}" stroke-width="5" stroke-linecap="round">
     <line x1="66" y1="14" x2="38" y2="58"/>
@@ -130,7 +119,6 @@ def _icon_broom(c):
     </g>
     <path d="M36 55 L52 71" stroke-width="6"/>
     </g></svg>'''
-
 PARTIES = {
     "BJP":      {"full": "Bharatiya Janata Party",    "color": "#FF9933", "icon": _icon_lotus},
     "SP":       {"full": "Samajwadi Party",            "color": "#DC2626", "icon": _icon_cycle},
@@ -138,7 +126,6 @@ PARTIES = {
     "BSP":      {"full": "Bahujan Samaj Party",         "color": "#2563EB", "icon": _icon_elephant},
     "AAP":      {"full": "Aam Aadmi Party",             "color": "#0EA5E9", "icon": _icon_broom},
 }
-
 ##############################################
 # SMART CONTRACT
 ##############################################
@@ -146,16 +133,13 @@ class SmartContract:
     def __init__(self):
         self.parties = list(PARTIES.keys())
         self.vote_count = {p: 0 for p in self.parties}
-
     def vote(self, voter, choice):
         if voter in voted or choice not in self.parties:
             return False
         self.vote_count[choice] += 1
         voted[voter] = True
         return True
-
 contract = SmartContract()
-
 ##############################################
 # BLOCKCHAIN
 ##############################################
@@ -166,20 +150,15 @@ class Block:
         self.data = data
         self.prev_hash = prev_hash
         self.hash = hashlib.sha256(f"{self.index}{self.timestamp}{self.data}{self.prev_hash}".encode()).hexdigest()
-
 class Blockchain:
     def __init__(self):
         self.chain = [Block(0, time.strftime("%d-%m-%Y %H:%M:%S"), "GENESIS BLOCK", "0" * 12)]
-
     def add_block(self, data):
         last = self.chain[-1]
         self.chain.append(Block(len(self.chain), time.strftime("%d-%m-%Y %H:%M:%S"), data, last.hash))
-
 chain = Blockchain()
-
 def broadcast_vote(data):
     chain.add_block(data)
-
 ##############################################
 # SHARED CSS / HTML SHELL
 ##############################################
@@ -260,15 +239,13 @@ BASE_CSS = """
   @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(11,31,58,.12);}50%{box-shadow:0 0 0 14px rgba(11,31,58,0);}}
 </style>
 """
-
 SEAL_SVG = """<svg viewBox="0 0 100 100">
 <circle cx="50" cy="50" r="46" fill="#ffffff"/>
 <circle cx="50" cy="50" r="46" fill="none" stroke="#c89b3c" stroke-width="2"/>
 <circle cx="50" cy="50" r="39" fill="none" stroke="#0b1f3a" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="2 4"/>
 <path d="M30 52 L45 66 L73 33" fill="none" stroke="#0b1f3a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>"""
-
-def shell(title, body, subtitle="Digital Voting Portal &bull; Demonstration System"):
+def shell(title, body, subtitle="Digital Voting Portal"):
     return f"""<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} | E-Voting Portal</title>{BASE_CSS}</head>
     <body>
@@ -279,20 +256,17 @@ def shell(title, body, subtitle="Digital Voting Portal &bull; Demonstration Syst
             <h1>Digital Voting Portal</h1>
             <p class="sub">{subtitle}</p>
         </div>
-        <div class="tag">DEMO BUILD</div>
     </header>
     <main>{body}</main>
     <div class="footer-note">
-        This is an academic / demonstration project and is <b>not affiliated with, endorsed by, or connected to</b>
+        This system is provided for educational purposes only and is not affiliated with, endorsed by, or connected to
         the Election Commission of India or any government body. Party names and symbols above are simplified,
-        original illustrations created for this demo, not official artwork.
+        original illustrations created for this project and are not official artwork.
     </div>
     </body></html>"""
-
 def party_icon_html(code, size=64):
     p = PARTIES[code]
     return f'<div class="icon-wrap" style="background:{p["color"]}22;">{p["icon"](p["color"])}</div>'
-
 ##############################################
 # MAIN WEB HANDLER
 ##############################################
@@ -300,7 +274,6 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         params = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
-
         if path == "/":
             strip = "".join(
                 f'<div class="chip" style="background:{p["color"]}22;">{p["icon"](p["color"])}</div>'
@@ -312,12 +285,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 <p class="page-sub">Secure &bull; Transparent &bull; Blockchain-Verified</p>
                 <a href="/loading" class="btn btn-primary" style="width:auto; padding:14px 40px;">Proceed to Voting Portal &rarr;</a>
                 <div class="strip">{strip}</div>
-                <div class="strip-label">Contesting Parties in this Demo Election</div>
-                <div class="disclaimer">Demo / educational project &mdash; not a real or official election system.</div>
+                <div class="strip-label">Contesting Parties</div>
+                <div class="disclaimer">This system is for educational purposes only and is not an official election system.</div>
             </div>
             """
             return self.respond(shell("Welcome", body))
-
         if path == "/loading":
             return self.respond(f"""<html><head><meta charset="utf-8">
             <meta http-equiv="refresh" content="1.6;URL='/home'" />{BASE_CSS}</head>
@@ -328,7 +300,6 @@ class WebHandler(BaseHTTPRequestHandler):
                 <p style="color:var(--muted); font-size:12px;">Verifying blockchain integrity</p>
             </div>
             </body></html>""")
-
         if path == "/home":
             body = """
             <div class="card">
@@ -336,7 +307,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 <p class="page-sub">Enter your registered Voter ID to receive a secure access token.</p>
                 <form action="/qr" method="get">
                     <label>Voter ID</label>
-                    <input type="text" name="id" placeholder="e.g. VOTER1001" required>
+                    <input type="text" name="id" placeholder="VOTER1001" required>
                     <button class="btn btn-primary">Generate Access Token &rarr;</button>
                 </form>
                 <div class="link-row"><a href="/register">New voter? Register here</a></div>
@@ -344,22 +315,20 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             """
             return self.respond(shell("Voter Login", body))
-
         if path == "/register":
             body = """
             <div class="card">
                 <h2 class="page-title">Voter Registration</h2>
-                <p class="page-sub">Naye voter yahan register karke apna Voter ID aur Fingerprint ID paa sakte hain.</p>
+                <p class="page-sub">Register here to receive a Voter ID and Fingerprint ID for this system.</p>
                 <form action="/register_submit" method="get">
                     <label>Full Name</label>
-                    <input type="text" name="name" placeholder="e.g. RAVI KUMAR" required>
+                    <input type="text" name="name" placeholder="RAVI KUMAR" required>
                     <button class="btn btn-primary">Register &amp; Get Voter ID &rarr;</button>
                 </form>
                 <div class="link-row"><a href="/home">&larr; Already registered? Login</a></div>
             </div>
             """
             return self.respond(shell("Voter Registration", body))
-
         if path == "/register_submit":
             name = params.get("name", [""])[0].strip()
             if not name:
@@ -369,7 +338,7 @@ class WebHandler(BaseHTTPRequestHandler):
             <div class="card center">
                 <div class="status-icon" style="background:var(--green);">&#10003;</div>
                 <h2 class="page-title">Registration Successful</h2>
-                <p class="page-sub">Welcome, {users[voter_id]}. Save these details &mdash; you'll need them to vote.</p>
+                <p class="page-sub">Welcome, {users[voter_id]}. Save these details ; you'll need them to vote.</p>
                 <label style="text-align:left;">Your Voter ID</label>
                 <div class="token-box">{voter_id}</div>
                 <label style="text-align:left;">Your Fingerprint ID (for biometric verification)</label>
@@ -379,7 +348,6 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             """
             return self.respond(shell("Registration Successful", body))
-
         if path == "/admin_login":
             body = """
             <div class="card">
@@ -394,12 +362,10 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             """
             return self.respond(shell("Officer Login", body))
-
         if path == "/admin":
             pw = params.get("pass", [""])[0]
             if pw != ADMIN_PASSWORD:
                 return self.respond(self._error_page("Incorrect admin password.", "/admin_login"))
-
             total_votes = sum(contract.vote_count.values()) or 1
             leader_code = max(contract.vote_count, key=contract.vote_count.get)
             rows = ""
@@ -412,7 +378,6 @@ class WebHandler(BaseHTTPRequestHandler):
                     <div class="bar-bg"><div class="bar-fill" id="bar-{code}" style="width:{pct}%; background:{p['color']};"></div></div>
                 </div>
                 """
-
             blocks = "".join(
                 f"""<div class="block-item">
                     <div class="idx">Block #{b.index}</div>
@@ -421,11 +386,9 @@ class WebHandler(BaseHTTPRequestHandler):
                 </div>"""
                 for b in reversed(chain.chain)
             )
-
             codes = list(PARTIES.keys())
             colors = [PARTIES[c]["color"] for c in codes]
             counts = [contract.vote_count[c] for c in codes]
-
             body = f"""
             <div class="card">
                 <h2 class="page-title">Election Command Center</h2>
@@ -437,7 +400,7 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             <div class="card" style="margin-top:20px;">
                 <h2 class="page-title" style="font-size:18px;">Live Vote Chart</h2>
-                <p class="page-sub">Refreshes every 2 seconds &mdash; no page reload needed.</p>
+                <p class="page-sub">Refreshes every 2 seconds & no page reload needed.</p>
                 <canvas id="voteChart" height="180"></canvas>
             </div>
             <div class="card" style="margin-top:20px;">
@@ -485,7 +448,6 @@ class WebHandler(BaseHTTPRequestHandler):
             </script>
             """
             return self.respond(shell("Admin Dashboard", body))
-
         if path == "/votes_live":
             data = {
                 "labels": list(contract.vote_count.keys()),
@@ -496,7 +458,6 @@ class WebHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(data).encode())
             return
-
         if path == "/qr":
             voter = params.get("id", [""])[0].strip().upper()
             if voter not in users:
@@ -517,12 +478,13 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             """
             return self.respond(shell("Access Token", body))
-
         if path == "/vote":
             voter = params.get("id", [""])[0]
             token = params.get("tkn", [""])[0]
             if qr_tokens.get(voter) != token:
                 return self.respond(self._error_page("Invalid or expired access token.", "/home"))
+            if voter in voted:
+                return self.respond(self._error_page("This Voter ID has already cast a vote.", "/home"))
             body = f"""
             <div class="card center">
                 <div class="fp-wrap">
@@ -542,13 +504,12 @@ class WebHandler(BaseHTTPRequestHandler):
                     <input type="hidden" name="id" value="{voter}">
                     <input type="hidden" name="tkn" value="{token}">
                     <label>Fingerprint ID</label>
-                    <input type="text" name="fp" placeholder="e.g. fp1" required>
+                    <input type="text" name="fp" placeholder="fp1" required>
                     <button class="btn btn-primary">Scan &amp; Verify</button>
                 </form>
             </div>
             """
             return self.respond(shell("Fingerprint Check", body))
-
         if path == "/verify_fp":
             voter = params.get("id", [""])[0]
             token = params.get("tkn", [""])[0]
@@ -559,7 +520,6 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.respond(self._error_page("Fingerprint verification failed.", "/vote?id=" + voter + "&tkn=" + token))
             if voter in voted:
                 return self.respond(self._error_page("This Voter ID has already cast a vote.", "/home"))
-
             cards = ""
             for code, p in PARTIES.items():
                 cards += f"""
@@ -569,6 +529,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     <div class="full-name">{p['full']}</div>
                     <form action="/cast" method="get">
                         <input type="hidden" name="id" value="{voter}">
+                        <input type="hidden" name="tkn" value="{token}">
                         <input type="hidden" name="c" value="{code}">
                         <button class="vote-btn" style="background:{p['color']};">Cast Vote</button>
                     </form>
@@ -582,12 +543,15 @@ class WebHandler(BaseHTTPRequestHandler):
             </div>
             """
             return self.respond(shell("Cast Your Vote", body))
-
         if path == "/cast":
             voter = params.get("id", [""])[0]
+            token = params.get("tkn", [""])[0]
             choice = params.get("c", [""])[0]
+            if qr_tokens.get(voter) != token:
+                return self.respond(self._error_page("Invalid or expired access token.", "/home"))
             p = PARTIES.get(choice)
             if contract.vote(voter, choice):
+                invalidate_token(voter)
                 broadcast_vote(f"{voter} voted {choice}")
                 block = chain.chain[-1]
                 body = f"""
@@ -615,9 +579,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 </div>
                 """
             return self.respond(shell("Vote Status", body))
-
         return self.respond(self._error_page("The page you're looking for doesn't exist.", "/"))
-
     def _error_page(self, message, back_url):
         body = f"""
         <div class="card center">
@@ -628,17 +590,20 @@ class WebHandler(BaseHTTPRequestHandler):
         </div>
         """
         return shell("Error", body)
-
     def respond(self, content):
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(content.encode())
-
     def log_message(self, format, *args):
         pass  # quiet logs
-
-
 if __name__ == "__main__":
-    print(f"Server running on 0.0.0.0:{PORT}")
+    print("=" * 50)
+    print(f"  Server running at: {LOCAL_URL}")
+    print("=" * 50)
+    # Auto-open the default browser at the local URL shortly after the
+    # server starts listening. Skip this in a container/deploy environment
+    # where there's no browser to open (webbrowser.open would just no-op or error).
+    if os.environ.get("OPEN_BROWSER", "1") == "1" and not os.environ.get("PORT"):
+        threading.Timer(1.0, lambda: webbrowser.open(LOCAL_URL)).start()
     HTTPServer(("0.0.0.0", PORT), WebHandler).serve_forever()
